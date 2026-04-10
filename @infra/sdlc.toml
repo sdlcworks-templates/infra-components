@@ -1,6 +1,5 @@
 ["@infra"]
 infra_code = true
-build_cmd = "bun -C .js install && bun -C ../js install && bun -C ../js run build --filter=@sdlc/components-build && sdlc-components-build --bundle"
+build_cmd = "bun -C .js install && sdlc-components-build --bundle"
 build_destination = "file://.js/infra-bundle.tar.gz"
-build_deps = ["components-run"]
-pkgs = ["nodejs_20", "bun"]
+build_deps = []

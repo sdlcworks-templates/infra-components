@@ -264,6 +264,7 @@ component.implement(CloudProvider.gcloud, {
     buildArtifacts,
     declareConnectionInterfaces,
     getCredentials,
+    gcp: gcpProvider,
   }) => {
     const {
       region,
@@ -283,6 +284,11 @@ component.implement(CloudProvider.gcloud, {
       loadBalancerIntegration,
     } = inputs;
 
+    // Default opts for all GCP resources — uses the explicit provider
+    const gcpOpts: pulumi.CustomResourceOptions = gcpProvider
+      ? { provider: gcpProvider }
+      : {};
+
     // Get container image from buildArtifacts (first component being deployed)
     const componentEntries = Object.entries(buildArtifacts);
     const containerImage =
@@ -294,7 +300,7 @@ component.implement(CloudProvider.gcloud, {
     const serviceAccount = new gcp.serviceaccount.Account($`service-account`, {
       accountId: $`sa`,
       displayName: "Service account for Cloud Run service",
-    });
+    }, gcpOpts);
 
     // Build environment variables
     const envVars = [
@@ -364,7 +370,7 @@ component.implement(CloudProvider.gcloud, {
           },
         ],
       },
-    });
+    }, gcpOpts);
 
     // Get GCP project from credentials
     const project = getCredentials().project;
@@ -373,7 +379,7 @@ component.implement(CloudProvider.gcloud, {
     const httpTriggerSa = new gcp.serviceaccount.Account($`http-trigger-sa`, {
       accountId: $`http-sa`,
       displayName: "Service account for HTTP triggering of Cloud Run service",
-    });
+    }, gcpOpts);
 
     // Grant the HTTP trigger SA permission to invoke the service
     new gcp.cloudrunv2.ServiceIamMember($`http-trigger-iam`, {
@@ -381,12 +387,12 @@ component.implement(CloudProvider.gcloud, {
       name: service.name,
       role: "roles/run.invoker",
       member: pulumi.interpolate`serviceAccount:${httpTriggerSa.email}`,
-    });
+    }, gcpOpts);
 
     // Create a key for the HTTP trigger SA
     const httpTriggerSaKey = new gcp.serviceaccount.Key($`http-trigger-sa-key`, {
       serviceAccountId: httpTriggerSa.name,
-    });
+    }, gcpOpts);
 
     // Store state for connection handlers
     state.serviceName = service.name;
@@ -427,7 +433,7 @@ component.implement(CloudProvider.gcloud, {
         cloudRun: {
           service: service.name,
         },
-      });
+      }, gcpOpts);
 
       // Create Backend Service for external load balancer
       const backendService = new gcp.compute.BackendService(
@@ -442,7 +448,8 @@ component.implement(CloudProvider.gcloud, {
               capacityScaler: 1.0,
             },
           ],
-        }
+        },
+        gcpOpts,
       );
 
       backendServiceId = backendService.selfLink;
@@ -455,7 +462,7 @@ component.implement(CloudProvider.gcloud, {
         name: service.name,
         role: "roles/run.invoker",
         member: "allUsers",
-      });
+      }, gcpOpts);
 
       // Declare BackendServiceCI
       connectionInterfaceEntries.push({
@@ -493,52 +500,59 @@ component.implement(CloudProvider.gcloud, {
     };
   },
 
-  connect: [
-    connectionHandler({
-      interface: InternalServiceCI,
-      handler: async (ctx) => {
-        // Grant the connecting service's service account permission to invoke this service
-        if (ctx.connectionData.serviceAccountEmail) {
-          new gcp.cloudrunv2.ServiceIamMember(
-            `iam-${ctx.connectionType}-invoker`,
-            {
-              location: ctx.state.region,
-              name: ctx.state.serviceName,
-              role: "roles/run.invoker",
-              member: pulumi.interpolate`serviceAccount:${ctx.connectionData.serviceAccountEmail}`,
-            }
-          );
-        }
+  connect: (({ state, gcp: gcpProvider }: any) => {
+    const gcpOpts: pulumi.CustomResourceOptions = gcpProvider
+      ? { provider: gcpProvider }
+      : {};
 
-        return {
-          uri: ctx.state.serviceUri,
-          metadata: {
-            serviceName: ctx.state.serviceName,
-            port: ctx.connectionData.port,
-          },
-        };
-      },
-    }),
-    connectionHandler({
-      interface: CloudRunServiceHTTPCI,
-      handler: async (ctx) => {
-        return {
-          uri: ctx.state.serviceUri,
-          metadata: {
-            method: "POST" as const,
-            serviceName: ctx.state.serviceName,
-            location: ctx.state.region,
-            project: ctx.state.project,
-            auth: {
-              type: "service_account_key" as const,
-              serviceAccountEmail: ctx.state.httpTriggerSaEmail,
-              serviceAccountKeyJson: ctx.state.httpTriggerSaKeyJson,
+    return [
+      connectionHandler({
+        interface: InternalServiceCI,
+        handler: async ({ $, connectionData }: any) => {
+          // Grant the connecting service's service account permission to invoke this service
+          if (connectionData.serviceAccountEmail) {
+            new gcp.cloudrunv2.ServiceIamMember(
+              $`iam-invoker`,
+              {
+                location: state.region,
+                name: state.serviceName,
+                role: "roles/run.invoker",
+                member: pulumi.interpolate`serviceAccount:${connectionData.serviceAccountEmail}`,
+              },
+              gcpOpts,
+            );
+          }
+
+          return {
+            uri: state.serviceUri,
+            metadata: {
+              serviceName: state.serviceName,
+              port: connectionData.port,
             },
-          },
-        };
-      },
-    }),
-  ],
+          };
+        },
+      }),
+      connectionHandler({
+        interface: CloudRunServiceHTTPCI,
+        handler: async (_ctx: any) => {
+          return {
+            uri: state.serviceUri,
+            metadata: {
+              method: "POST" as const,
+              serviceName: state.serviceName,
+              location: state.region,
+              project: state.project,
+              auth: {
+                type: "service_account_key" as const,
+                serviceAccountEmail: state.httpTriggerSaEmail,
+                serviceAccountKeyJson: state.httpTriggerSaKeyJson,
+              },
+            },
+          };
+        },
+      }),
+    ];
+  }),
 });
 
 // ---- Cloudflare Provider Implementation ----
@@ -557,6 +571,7 @@ component.implement(CloudProvider.cloudflare, {
     state,
     buildArtifacts,
     declareConnectionInterfaces,
+    cloudflare: cfProvider,
   }) => {
     const {
       accountId,
@@ -570,6 +585,11 @@ component.implement(CloudProvider.cloudflare, {
       logpush,
       cfBindings,
     } = inputs;
+
+    // Default opts for all Cloudflare resources — uses the explicit provider
+    const cfOpts: pulumi.CustomResourceOptions = cfProvider
+      ? { provider: cfProvider }
+      : {};
 
     if (!accountId) {
       throw new Error("accountId is required for Cloudflare provider");
@@ -683,7 +703,7 @@ component.implement(CloudProvider.cloudflare, {
           }
         : undefined,
       logpush: logpush || false,
-    });
+    }, cfOpts);
 
     // Always enable workers.dev subdomain for the worker
     // This ensures the worker is accessible even without custom routing
@@ -692,7 +712,7 @@ component.implement(CloudProvider.cloudflare, {
       scriptName: scriptName,
       enabled: true,
       previewsEnabled: routing?.type === "subdomain" ? routing.previewsEnabled : false,
-    }, { dependsOn: [worker] });
+    }, { dependsOn: [worker], ...cfOpts });
 
     // Handle routing configuration
     let workerUri: pulumi.Output<string>;
@@ -704,7 +724,7 @@ component.implement(CloudProvider.cloudflare, {
           zoneId: routing.zoneId,
           pattern: routing.pattern,
           script: scriptName,
-        });
+        }, cfOpts);
 
         workerUri = pulumi.interpolate`https://${routing.pattern.replace(
           "/*",
@@ -717,7 +737,7 @@ component.implement(CloudProvider.cloudflare, {
           zoneId: routing.zoneId,
           hostname: routing.hostname,
           service: scriptName,
-        });
+        }, cfOpts);
 
         workerUri = pulumi.interpolate`https://${routing.hostname}`;
       } else {
@@ -751,14 +771,6 @@ component.implement(CloudProvider.cloudflare, {
           accountId: accountId,
         },
       },
-      {
-        interface: CloudRunJobHTTPCI,
-        data: {},
-      },
-      {
-        interface: CloudRunServiceHTTPCI,
-        data: {},
-      },
     ]);
 
     return {
@@ -770,34 +782,34 @@ component.implement(CloudProvider.cloudflare, {
     };
   },
 
-  connect: [
+  connect: (({ state }: any) => [
     connectionHandler({
       interface: ServiceBindingCI,
-      handler: async (ctx) => {
+      handler: async (_ctx: any) => {
         // When another worker connects to this one via service binding,
         // the orchestrator will configure the binding on the connecting worker
         // We return the TARGET worker's script name (this component's state)
         return {
-          uri: pulumi.interpolate`service:${ctx.state.scriptName}`,
+          uri: pulumi.interpolate`service:${state.scriptName}`,
           metadata: {
-            scriptName: ctx.state.scriptName,
+            scriptName: state.scriptName,
           },
         };
       },
     }),
     connectionHandler({
       interface: HTTPPublicCI,
-      handler: async (ctx) => {
+      handler: async (_ctx: any) => {
         // Cloudflare Workers are public by default, no auth needed
         return {
-          uri: ctx.state.workerUri,
+          uri: state.workerUri,
           metadata: {
             method: "GET" as const,
           },
         };
       },
     }),
-  ],
+  ]),
 
   upsertArtifacts: async ({ buildArtifacts, state, getCredentials }) => {
     const { readFileSync } = await import("fs");
