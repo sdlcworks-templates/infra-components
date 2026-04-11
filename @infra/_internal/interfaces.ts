@@ -89,6 +89,23 @@ export const R2BucketCI = defineConnectionInterface(
 );
 
 /**
+ * D1 Database connection interface
+ * Enables Cloudflare Workers to bind to D1 databases
+ *
+ * Result metadata includes the database ID for binding configuration
+ */
+export const D1DatabaseCI = defineConnectionInterface(
+  "d1-database",
+  z.object({
+    databaseId: z.string(),
+    databaseName: z.string(),
+  }),
+  z.object({
+    databaseId: z.string(),
+  })
+);
+
+/**
  * HTTP Public connection interface (Generic)
  * For components that expose simple public HTTP endpoints without special auth.
  * 

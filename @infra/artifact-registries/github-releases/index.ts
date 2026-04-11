@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
-import { ArtifactRegistry, DeploymentArtifactType } from "@sdlcworks/components";
+import {
+  ArtifactRegistry,
+  DeploymentArtifactType,
+} from "@sdlcworks/components";
 
 const registry = new ArtifactRegistry({
   name: "github-release",
@@ -22,7 +25,14 @@ const registry = new ArtifactRegistry({
     state.owner = config.owner;
     state.repo = config.repo;
   },
-  publish: async ({ componentName, artifact, version, tag, state, getCredentials }) => {
+  publish: async ({
+    componentName,
+    artifact,
+    version,
+    tag,
+    state,
+    getCredentials,
+  }) => {
     const { owner, repo } = state;
 
     // Get GH_TOKEN from cloud_credentials (provider: "github")
@@ -31,7 +41,7 @@ const registry = new ArtifactRegistry({
     if (!ghToken) {
       throw new Error(
         "github-release: GH_TOKEN not found in cloud_credentials for provider 'github'. " +
-          "Add github credentials to cloud_credentials in the project config.",
+          "Add github credentials to cloud_credentials in the project config."
       );
     }
 
@@ -46,8 +56,10 @@ const registry = new ArtifactRegistry({
 
     // Check if a release with this tag already exists
     const checkRes = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tagName)}`,
-      { headers },
+      `https://api.github.com/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(
+        tagName
+      )}`,
+      { headers }
     );
 
     let release: any;
@@ -55,7 +67,9 @@ const registry = new ArtifactRegistry({
     if (checkRes.ok) {
       // Release already exists — use it
       release = await checkRes.json();
-      console.error(`GitHub Release '${tagName}' already exists, uploading asset to it`);
+      console.error(
+        `GitHub Release '${tagName}' already exists, uploading asset to it`
+      );
     } else {
       // Create a new GitHub Release
       const createRes = await fetch(
@@ -70,13 +84,13 @@ const registry = new ArtifactRegistry({
             prerelease: false,
             generate_release_notes: true,
           }),
-        },
+        }
       );
 
       if (!createRes.ok) {
         const err = await createRes.text();
         throw new Error(
-          `Failed to create GitHub Release '${tagName}': ${createRes.status} ${err}`,
+          `Failed to create GitHub Release '${tagName}': ${createRes.status} ${err}`
         );
       }
 
@@ -90,7 +104,7 @@ const registry = new ArtifactRegistry({
     const assetName = `${componentName}-${process.platform}-${process.arch}`;
     const uploadUrl = (release.upload_url as string).replace(
       "{?name,label}",
-      "",
+      ""
     );
 
     const uploadRes = await fetch(`${uploadUrl}?name=${assetName}`, {
@@ -105,7 +119,7 @@ const registry = new ArtifactRegistry({
     if (!uploadRes.ok) {
       const err = await uploadRes.text();
       throw new Error(
-        `Failed to upload release asset '${assetName}': ${uploadRes.status} ${err}`,
+        `Failed to upload release asset '${assetName}': ${uploadRes.status} ${err}`
       );
     }
 

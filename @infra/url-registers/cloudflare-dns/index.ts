@@ -1,76 +1,97 @@
-import { z } from "zod";
 import * as pulumi from "@pulumi/pulumi";
 import * as cloudflare from "@pulumi/cloudflare";
 import { URLRegister } from "@sdlcworks/components";
 import { PublicCI } from "../../_internal/interfaces";
-
-const RecordEntrySchema = z.object({
-  /** Subdomain name (e.g., "api", "console") */
-  name: z.string(),
-  /** App component name this record routes to (e.g., "sdlcserv", "console") */
-  component: z.string(),
-  /** Whether to proxy through Cloudflare (orange cloud = HTTPS + CDN + DDoS protection) */
-  proxied: z.boolean().default(true),
-});
+import { LOG_PREFIX, RESOURCE_NAMES } from "./constants";
+import { ConfigSchema, type Config } from "./schema";
+import {
+  buildComponentResultUri,
+  createDnsRecord,
+  invertByAppName,
+  resolveFqdn,
+  resolveTtl,
+  warnMissingComponents,
+  type ComponentEntry,
+} from "./provision";
 
 const register = new URLRegister({
   name: "cloudflare-dns",
   interface: PublicCI,
-  configSchema: z.object({
-    /** Root domain (e.g., "gohashira.wtf"). Zone ID is looked up automatically. */
-    domain: z.string(),
-    /** Cloudflare API token with DNS edit permissions for this zone. */
-    apiToken: z.string(),
-    /** DNS A records to create, each mapping a subdomain to an app component. */
-    records: z.array(RecordEntrySchema),
-  }),
-  provision: async ({ config, components, $ }) => {
+  configSchema: ConfigSchema,
+  provision: async (ctx) => {
+    // The framework's InferZodType wraps every top-level config field in
+    // PulumiInput<T> (to accept Outputs from upstream resolutions). In practice
+    // the orchestrator resolves all $[[kv]] refs before calling provision, so
+    // config values are concrete by the time we run. Cast once at the boundary.
+    const config = ctx.config as unknown as Config;
+    const { components, $ } = ctx;
+
     const results: Record<string, pulumi.Output<string>> = {};
 
-    // Create a dedicated Cloudflare provider using the DNS-specific API token.
-    // This is separate from the default CLOUDFLARE_API_TOKEN env var (set from
-    // cloud_credentials) which may not have DNS edit permissions.
-    const cfProvider = new cloudflare.Provider($`cf-dns-provider`, {
+    const provider = new cloudflare.Provider($(RESOURCE_NAMES.PROVIDER), {
       apiToken: config.apiToken,
     });
-    const providerOpts = { provider: cfProvider };
+    const opts = { provider };
 
-    // Look up the Cloudflare zone ID from the domain name.
     const zone = cloudflare.getZoneOutput(
       { filter: { name: config.domain } },
-      providerOpts,
+      opts,
     );
 
-    // Extract the IP from any component's metadata.
-    // All components on the same k3s cluster share the same external IP.
-    const firstEntry = Object.values(components)[0];
-    if (!firstEntry) {
-      console.error(
-        "cloudflare-dns: no components found via PublicCI interface. " +
-          "Ensure at least one infra component declares PublicCI.",
-      );
-      return results;
-    }
-    const ip = firstEntry.metadata.host;
+    const inverted = invertByAppName(
+      components as Record<string, ComponentEntry>,
+    );
+    const presentAppNames = new Set(inverted.map(([appName]) => appName));
+    warnMissingComponents(config, presentAppNames);
 
-    for (const record of config.records) {
-      const fqdn = `${record.name}.${config.domain}`;
+    const seenFqdn = new Map<string, string>();
 
-      new cloudflare.DnsRecord(
-        $`dns-${record.name}`,
-        {
-          zoneId: zone.zoneId,
-          name: record.name,
-          type: "A",
-          content: ip,
-          proxied: record.proxied,
-          ttl: 1, // 1 = automatic (required by Cloudflare; proxied records always use automatic TTL)
-        },
-        providerOpts,
-      );
+    for (const [appName, { metadata }] of inverted) {
+      const rcfg = config.records[appName];
+      if (!rcfg) {
+        console.warn(
+          `${LOG_PREFIX} component '${appName}' has no record entry; skipping`,
+        );
+        continue;
+      }
 
-      const protocol = record.proxied ? "https" : "http";
-      results[record.component] = pulumi.output(`${protocol}://${fqdn}`);
+      if (!metadata.host) {
+        console.error(
+          `${LOG_PREFIX} component '${appName}' missing metadata.host; skipping`,
+        );
+        continue;
+      }
+
+      const fqdn = resolveFqdn(rcfg, config.domain);
+      const previouslySeenBy = seenFqdn.get(fqdn);
+      if (previouslySeenBy) {
+        throw new Error(
+          `${LOG_PREFIX} duplicate fqdn '${fqdn}' for components '${appName}' and '${previouslySeenBy}'`,
+        );
+      }
+      seenFqdn.set(fqdn, appName);
+
+      const proxied = rcfg.proxied ?? config.defaults.proxied;
+      const ttl = resolveTtl(rcfg, config.defaults, proxied);
+      const host = pulumi.output(metadata.host) as pulumi.Output<string>;
+
+      createDnsRecord({
+        $,
+        opts,
+        zoneId: zone.zoneId,
+        appName,
+        rcfg,
+        host,
+        proxied,
+        ttl,
+      });
+
+      results[appName] = buildComponentResultUri({
+        appName,
+        fqdn,
+        proxied,
+        metadata,
+      });
     }
 
     return results;
