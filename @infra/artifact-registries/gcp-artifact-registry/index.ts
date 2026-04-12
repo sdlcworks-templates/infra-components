@@ -3,7 +3,6 @@ import { execSync } from "node:child_process";
 import { ArtifactRegistry, DeploymentArtifactType } from "@sdlcworks/components";
 
 const registry = new ArtifactRegistry({
-  name: "gcp-artifact-registry",
   acceptedArtifactTypes: [DeploymentArtifactType.oci_spec_image],
   configSchema: z.object({
     location: z.string(),

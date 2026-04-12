@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { ArtifactRegistry, DeploymentArtifactType } from "@sdlcworks/components";
 
 const registry = new ArtifactRegistry({
-  name: "npm-public",
   acceptedArtifactTypes: [DeploymentArtifactType.file],
   configSchema: z.object({}),
   provision: async () => {

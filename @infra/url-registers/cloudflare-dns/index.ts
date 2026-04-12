@@ -15,7 +15,6 @@ import {
 } from "./provision";
 
 const register = new URLRegister({
-  name: "cloudflare-dns",
   interface: PublicCI,
   configSchema: ConfigSchema,
   provision: async (ctx) => {

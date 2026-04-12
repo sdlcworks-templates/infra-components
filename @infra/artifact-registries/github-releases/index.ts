@@ -6,7 +6,6 @@ import {
 } from "@sdlcworks/components";
 
 const registry = new ArtifactRegistry({
-  name: "github-release",
   acceptedArtifactTypes: [DeploymentArtifactType.file],
   configSchema: z.object({
     /** GitHub org or user (e.g., "systemsway-qa") */
